@@ -170,6 +170,7 @@ static int virtio_net_init(const struct device *dev)
 {
     uint32_t devid, features;
     int i;
+    struct virtio_device *vdev = virtio_get_vmmio_dev(DEV_CFG(dev)->bus);
 
     LOG_INST_DBG(DEV_CFG(dev)->log, "(%p)\n", dev);
 
@@ -178,43 +179,44 @@ static int virtio_net_init(const struct device *dev)
         return -1;
 
     LOG_INST_DBG(DEV_CFG(dev)->log, "bus %p\n", DEV_CFG(dev)->bus);
-    devid = virtio_get_devid(DEV_CFG(dev)->bus);
+    devid = virtio_get_devid(vdev);
     if (devid != VIRTIO_ID_NETWORK)
         {
         LOG_INST_ERR(DEV_CFG(dev)->log, "Expected devid %04x, got %04x\n", VIRTIO_ID_NETWORK, devid);
         return -1;
         }
     DEV_DATA(dev)->dev = dev;
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER);
-    virtio_set_features(DEV_CFG(dev)->bus, VIRTIO_NET_F_MAC/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
-    features =virtio_get_features(DEV_CFG(dev)->bus);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
+    virtio_set_features(vdev, VIRTIO_NET_F_MAC/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
+    features = virtio_get_features(vdev);
 
     LOG_INST_DBG(DEV_CFG(dev)->log, "features: %08x\n", features);
 
     DEV_DATA(dev)->vqin =
-        virtio_setup_virtqueue(
-            DEV_CFG(dev)->bus,
+        virtio_mmio_setup_virtqueue(
+            vdev,
             0,
             DEV_CFG(dev)->vqs[0],
             virtio_net_vqin_cb,
-            (struct device *)dev
-            );
+            (struct device *)dev,
+            "nq1");
     if (!DEV_DATA(dev)->vqin)
         return -1;
 
     DEV_DATA(dev)->vqout =
-        virtio_setup_virtqueue(
-            DEV_CFG(dev)->bus,
+        virtio_mmio_setup_virtqueue(
+            vdev,
             1,
             DEV_CFG(dev)->vqs[1],
             virtio_net_vqout_cb,
-            DEV_DATA(dev)
-            );
+            DEV_DATA(dev),
+            "nq2");
+
     if (!DEV_DATA(dev)->vqout)
         return -1;
 
-    virtio_register_device(DEV_CFG(dev)->bus, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+    virtio_mmio_register_device(vdev, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
 
     DEV_DATA(dev)->hdrsize = sizeof(struct virtio_net_hdr);
     if (!(features & VIRTIO_NET_F_MRG_RXBUF))
@@ -255,7 +257,7 @@ static int virtio_net_init(const struct device *dev)
     virtqueue_notify(DEV_DATA(dev)->vqout);
 
     if (VIRTIO_NET_F_MAC & features)
-        virtio_read_config(DEV_CFG(dev)->bus, 0, DEV_DATA(dev)->mac_addr, 6);
+        virtio_read_config(vdev, 0, DEV_DATA(dev)->mac_addr, 6);
     else
         {
         __ASSERT(0, "should generate a MAC address");
