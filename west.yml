@@ -21,6 +21,11 @@ manifest:
   remotes:
     - name: upstream
       url-base: https://github.com/zephyrproject-rtos
+    - name: openamp
+      url-base: https://github.com/openamp
+    - name: dmilea
+      url-base: https://github.com/danmilea
+
 
   #
   # Please add items below based on alphabetical order
@@ -149,7 +154,8 @@ manifest:
       groups:
         - hal
     - name: libmetal
-      revision: c6efe091dfe02704097586a522969b5a4cc197bd
+      remote: dmilea
+      revision: virtio-exp
       path: modules/hal/libmetal
       groups:
         - hal
@@ -195,7 +201,8 @@ manifest:
       revision: b8cea37dbdc8fc58cc14b4e19fa850877a9da520
       path: modules/bsim_hw_models/nrf_hw_models
     - name: open-amp
-      revision: cfd050ff38a9d028dc211690b2ec35971128e45e
+      remote: dmilea
+      revision: virtio-exp
       path: modules/lib/open-amp
     - name: openthread
       revision: d4d46ba94290bcf93cc849b832f0ad305c72c473
