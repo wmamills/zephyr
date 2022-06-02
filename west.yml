@@ -155,7 +155,7 @@ manifest:
         - hal
     - name: libmetal
       remote: dmilea
-      revision: virtio-exp
+      revision: virtio-exp0
       path: modules/hal/libmetal
       groups:
         - hal
