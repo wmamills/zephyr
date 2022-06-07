@@ -49,9 +49,7 @@
 
 #include <openamp/virtqueue.h>
 #include <openamp/virtio.h>
-
 #include <openamp/virtio_mmio.h>
-#include <openamp/virtio_config.h>
 
 #ifdef __cplusplus
 extern "C" {

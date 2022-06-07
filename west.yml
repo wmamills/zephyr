@@ -154,8 +154,8 @@ manifest:
       groups:
         - hal
     - name: libmetal
-      remote: dmilea
-      revision: virtio-exp0
+      remote: openamp
+      revision: virtio-exp
       path: modules/hal/libmetal
       groups:
         - hal
@@ -202,7 +202,7 @@ manifest:
       path: modules/bsim_hw_models/nrf_hw_models
     - name: open-amp
       remote: dmilea
-      revision: virtio-exp
+      revision: virtio-exp0
       path: modules/lib/open-amp
     - name: openthread
       revision: d4d46ba94290bcf93cc849b832f0ad305c72c473
