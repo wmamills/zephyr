@@ -142,6 +142,7 @@ static bool workq_on = false;
 static int virtio_serial_init(const struct device *dev)
 {
     uint32_t devid, features;
+    struct virtio_device *vdev = virtio_get_vmmio_dev(DEV_CFG(dev)->bus);
 
     printk("%s()\n",__FUNCTION__);
 
@@ -161,45 +162,47 @@ static int virtio_serial_init(const struct device *dev)
     if (!device_is_ready(DEV_CFG(dev)->bus))
         return -1;
     printk("bus %p\n", DEV_CFG(dev)->bus);
-    devid = virtio_get_devid(DEV_CFG(dev)->bus);
+    devid = virtio_get_devid(vdev);
     if (devid != VIRTIO_ID_CONSOLE)
         {
         printk("Bad devid %08x\n", devid);
         return -1;
         }
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER);
-    virtio_set_features(DEV_CFG(dev)->bus, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
-    features =virtio_get_features(DEV_CFG(dev)->bus);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
+    virtio_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
+    features = virtio_get_features(vdev);
     printk("features: %08x\n", features);
 
     DEV_DATA(dev)->chan0->vqin =
-        virtio_setup_virtqueue(
-            DEV_CFG(dev)->bus,
+        virtio_mmio_setup_virtqueue(
+            vdev,
             0,
             DEV_CFG(dev)->vqs[0],
 #if !defined(ALTERNATE_POLL)
             virtio_serial_vqin_cb,
-            DEV_DATA(dev)->chan0
+            DEV_DATA(dev)->chan0,
 #else
             NULL,
-            NULL
+            NULL,
 #endif
+            "cvq1"
             );
     if (!DEV_DATA(dev)->chan0->vqin)
         return -1;
 
     DEV_DATA(dev)->chan0->vqout =
-        virtio_setup_virtqueue(
-            DEV_CFG(dev)->bus,
+        virtio_mmio_setup_virtqueue(
+            vdev,
             1,
             DEV_CFG(dev)->vqs[1],
 #if !defined(ALTERNATE_POLL)
             virtio_serial_vqout_cb,
-            DEV_DATA(dev)->chan0
+            DEV_DATA(dev)->chan0,
 #else
             NULL,
-            NULL
+            NULL,
 #endif
+            "cvq2"
             );
     if (!DEV_DATA(dev)->chan0->vqout)
         return -1;
@@ -207,10 +210,10 @@ static int virtio_serial_init(const struct device *dev)
     DEV_DATA(dev)->chan0->ser_dev = dev;
     DEV_DATA(dev)->chan0->rxbuf = 0;
 
-    virtio_register_device(DEV_CFG(dev)->bus, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER_OK);
-    virtqueue_notify(DEV_DATA(dev)->chan0->vqin);
-    virtqueue_notify(DEV_DATA(dev)->chan0->vqout);
+    virtio_mmio_register_device(vdev, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+    virtqueue_kick(DEV_DATA(dev)->chan0->vqin);
+    virtqueue_kick(DEV_DATA(dev)->chan0->vqout);
 
     return 0;
 }
@@ -275,7 +278,7 @@ static int virtio_serial_poll_in(const struct device *dev, unsigned char *p_char
     if (atomic_cas(&chan->rx_inuse, 0, 1) == false)
         return ret;
     if (chan->rxpoll_active) {
-        void *cookie = virtqueue_dequeue(chan->vqin, NULL);
+        void *cookie = virtqueue_get_buffer(chan->vqin, NULL, NULL);
         if (!cookie) {
             /* Nothing received yet */
             atomic_set(&chan->rx_inuse, 0);
@@ -284,8 +287,9 @@ static int virtio_serial_poll_in(const struct device *dev, unsigned char *p_char
         *p_char = chan->rxpoll;
         ret = 0;
     }
-    virtqueue_enqueue_buf(chan->vqin, (void*)(uintptr_t)1, 1, &chan->rxpoll, 1);
-    virtqueue_notify(chan->vqin);
+    struct virtqueue_buf vb[1] = {{.buf = &chan->rxpoll, .len = 1} };
+    virtqueue_add_buffer(chan->vqin, vb, 0, 1, (void*)(uintptr_t)1);
+    virtqueue_kick(chan->vqin);
     chan->rxpoll_active = true;
     atomic_set(&chan->rx_inuse, 0);
     return ret;
@@ -337,8 +341,9 @@ static void virtio_serial_poll_out(const struct device *dev, unsigned char out_c
     __ASSERT(length, "no space in the ring buffer");
     data[0] = out_char;
     ring_buf_put_finish(chan->txfifo, 1);
-    virtqueue_enqueue_buf(chan->vqout, (void*)(uintptr_t)1, 0, data, 1);
-    virtqueue_notify(chan->vqout);
+    struct virtqueue_buf vb[1] = {{.buf = data, .len = 1} };
+    virtqueue_add_buffer(chan->vqout, vb, 1, 0, (void*)(uintptr_t)1);
+    virtqueue_kick(chan->vqout);
     atomic_set(&chan->tx_inuse, 0);
 #else
     if (atomic_cas(&chan->tx_inuse, 0, 1) == false)
@@ -347,7 +352,7 @@ static void virtio_serial_poll_out(const struct device *dev, unsigned char out_c
     length = ring_buf_put_claim(chan->txfifo, &data, 1);
 
     if ((length == 0) || virtqueue_full(chan->vqout)) {
-        void *cookie = virtqueue_dequeue(chan->vqout, NULL);
+        void *cookie = virtqueue_get_buffer(chan->vqout, NULL, NULL);
         if (cookie)
             ring_buf_get(chan->txfifo, NULL, (uint32_t)(uintptr_t)cookie);
         }
@@ -360,8 +365,9 @@ static void virtio_serial_poll_out(const struct device *dev, unsigned char out_c
     }
     data[0] = out_char;
     ring_buf_put_finish(chan->txfifo, 1);
-    virtqueue_enqueue_buf(chan->vqout, (void*)(uintptr_t)1, 0, data, 1);
-    virtqueue_notify(chan->vqout);
+    struct virtqueue_buf vb[1] = {{.buf = data, .len = 1} };
+    virtqueue_add_buffer(chan->vqout, vb, 1, 0, (void*)(uintptr_t)1);
+    virtqueue_kick(chan->vqout);
     atomic_set(&chan->tx_inuse, 0);
 #endif
 }
@@ -376,7 +382,7 @@ static void virtio_serial_vqin_cb(void *arg)
     bool rx_ready = false;
     printk("vqin\n");
 
-    while((cookie = virtqueue_dequeue(chan->vqin, &length))) {
+    while((cookie = virtqueue_get_buffer(chan->vqin, &length, NULL))) {
         printk("got %d\n", length);
 
         written = ring_buf_put(chan->rxfifo, cookie, length);
@@ -401,7 +407,7 @@ static void virtio_serial_vqout_cb(void *arg)
     bool tx_ready = false;
     printk("vqout\n");
     do {
-        cookie = virtqueue_dequeue(chan->vqout, NULL);
+        cookie = virtqueue_get_buffer(chan->vqout, NULL, NULL);
         if (cookie) {
             length = (int)(uintptr_t)cookie;
             ring_buf_get(chan->txfifo, NULL, length);
@@ -472,8 +478,9 @@ static int virtio_serial_fifo_fill(const struct device *dev, const uint8_t *tx_d
     __ASSERT(length, "no space in the ring buffer");
     memcpy(data, tx_data, length);
     ring_buf_put_finish(chan->txfifo, length);
-    virtqueue_enqueue_buf(chan->vqout, (void*)(uintptr_t)length, 0, data, length);
-    virtqueue_notify(chan->vqout);
+    struct virtqueue_buf vb[1] = {{.buf = data, .len = length} };
+    virtqueue_add_buffer(chan->vqout, vb, 1, 0, (void*)(uintptr_t)length);
+    virtqueue_kick(chan->vqout);
     atomic_set(&chan->tx_inuse, 0);
     return length;
 }
@@ -526,8 +533,9 @@ static void virtio_serial_rx_refill(const struct device *dev)
         return;
     data = chan->rxbufs[chan->rxbuf++];
     chan->rxbuf %= VQIN_SIZE;
-    virtqueue_enqueue_buf(chan->vqin, data, 1, data, RXBUF_SIZE);
-    virtqueue_notify(chan->vqin);
+    struct virtqueue_buf vb[1] = {{.buf = data, .len = RXBUF_SIZE} };
+    virtqueue_add_buffer(chan->vqin, vb, 0, 1, data);
+    virtqueue_kick(chan->vqin);
 }
 #endif
 

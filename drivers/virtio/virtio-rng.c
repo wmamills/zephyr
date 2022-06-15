@@ -36,6 +36,7 @@ struct virtio_rng_data {
 static int virtio_rng_init(const struct device *dev)
 {
     uint32_t devid, features;
+    struct virtio_device *vdev = virtio_get_vmmio_dev(DEV_CFG(dev)->bus);
 
     printk("%s()\n",__FUNCTION__);
     LOG_INST_DBG(DEV_CFG(dev)->log, "(%p)\n", dev);
@@ -44,32 +45,33 @@ static int virtio_rng_init(const struct device *dev)
     if (!device_is_ready(DEV_CFG(dev)->bus))
         return -1;
     LOG_INST_DBG(DEV_CFG(dev)->log, "bus %p\n", DEV_CFG(dev)->bus);
-    devid = virtio_get_devid(DEV_CFG(dev)->bus);
+    devid = virtio_get_devid(vdev);
     if (devid != VIRTIO_ID_ENTROPY)
         {
         LOG_INST_ERR(DEV_CFG(dev)->log, "Expected devid %04x, got %04x\n", VIRTIO_ID_ENTROPY, devid);
         return -1;
         }
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER);
-    virtio_set_features(DEV_CFG(dev)->bus, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
-    features =virtio_get_features(DEV_CFG(dev)->bus);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
+    virtio_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
+    features = virtio_get_features(vdev);
 
     LOG_INST_DBG(DEV_CFG(dev)->log, "features: %08x\n", features);
 
     DEV_DATA(dev)->vqin =
-        virtio_setup_virtqueue(
-            DEV_CFG(dev)->bus,
+        virtio_mmio_setup_virtqueue(
+            vdev,
             0,
             DEV_CFG(dev)->vqs[0],
             NULL,
-            NULL
+            NULL,
+            "rvq1"
             );
     if (!DEV_DATA(dev)->vqin)
         return -1;
-    virtio_register_device(DEV_CFG(dev)->bus, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
-    virtio_set_status(DEV_CFG(dev)->bus, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+    virtio_mmio_register_device(vdev, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
+    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
 
-    virtqueue_notify(DEV_DATA(dev)->vqin);
+    virtqueue_kick(DEV_DATA(dev)->vqin);
 
     return 0;
 }
@@ -78,11 +80,12 @@ static int virtio_rng_get_entropy_internal(const struct device *dev, uint8_t *bu
 {
     void *cookie;
     /*Not supposed to happen*/
-    if (virtqueue_enqueue_buf(DEV_DATA(dev)->vqin, buffer, 1, buffer, length))
+    struct virtqueue_buf vb[1] = {{.buf = buffer, .len = length} };
+    if (virtqueue_add_buffer(DEV_DATA(dev)->vqin, vb, 0, 1, (void*)buffer))
 	    return -EIO;
-    virtqueue_notify(DEV_DATA(dev)->vqin);
+    virtqueue_kick(DEV_DATA(dev)->vqin);
     do {
-	    cookie = virtqueue_dequeue(DEV_DATA(dev)->vqin, NULL);
+	    cookie = virtqueue_get_buffer(DEV_DATA(dev)->vqin, NULL, NULL);
 	    /* TODO: yield or something if not in isr context. might not work, as we're irq locked when called from task context */
     } while (!cookie);
     __ASSERT(cookie == buffer, "Got the wrong cookie");

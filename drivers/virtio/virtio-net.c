@@ -253,8 +253,8 @@ static int virtio_net_init(const struct device *dev)
 #endif
         sys_slist_append(&DEV_DATA(dev)->tx_free_list, &DEV_CFG(dev)->txdesc[i].node);
         }
-    virtqueue_notify(DEV_DATA(dev)->vqin);
-    virtqueue_notify(DEV_DATA(dev)->vqout);
+    virtqueue_kick(DEV_DATA(dev)->vqin);
+    virtqueue_kick(DEV_DATA(dev)->vqout);
 
     if (VIRTIO_NET_F_MAC & features)
         virtio_read_config(vdev, 0, DEV_DATA(dev)->mac_addr, 6);
@@ -286,8 +286,8 @@ static int virtio_net_send(const struct device *dev, struct net_pkt *pkt)
     int key;
     int ret = -EIO;
 #if defined(CONFIG_VIRTIO_NET_ZEROCOPY_TX)
-    struct iovec iov[32];
-    size_t iovlen = 1;
+    struct virtqueue_buf vqb[32];
+    size_t vqblen = 1;
     struct net_buf *frag;
 #endif
 
@@ -310,20 +310,20 @@ static int virtio_net_send(const struct device *dev, struct net_pkt *pkt)
     memset(&desc->pkt->hdr, 0, sizeof(desc->pkt->hdr));
 #if defined(CONFIG_VIRTIO_NET_ZEROCOPY_TX)
     desc->npkt = pkt;
-    iov[0].iov_base = &desc->pkt->hdr;
-    iov[0].iov_len = DEV_DATA(dev)->hdrsize;
-    for (frag = pkt->frags; frag ; frag = frag->frags, iovlen++) {
-            if (iovlen >= 32)
+    vqb[0].buf = &desc->pkt->hdr;
+    vqb[0].len = DEV_DATA(dev)->hdrsize;
+    for (frag = pkt->frags; frag ; frag = frag->frags, vqblen++) {
+            if (vqblen >= 32)
                 {
-                LOG_INST_ERR(DEV_CFG(dev)->log, " iovlen %ld\n", iovlen);
+                LOG_INST_ERR(DEV_CFG(dev)->log, " vqblen %ld\n", vqblen);
                 goto recycle;
                 }
-            iov[iovlen].iov_base = frag->data;
-            iov[iovlen].iov_len = frag->len;
-            LOG_INST_DBG(DEV_CFG(dev)->log, " iovlen %ld len %d\n", iovlen, frag->len);
+            vqb[vqblen].buf = frag->data;
+            vqb[vqblen].len = frag->len;
+            LOG_INST_DBG(DEV_CFG(dev)->log, " vqblen %ld len %d\n", vqblen, frag->len);
 
         }
-    if (virtqueue_enqueue(DEV_DATA(dev)->vqout, (void*)desc, &iov[0], iovlen, 0))
+    if (virtqueue_add_buffer(DEV_DATA(dev)->vqout, &vqb[0], vqblen, 0, (void*)desc))
         goto recycle;
 #else /* CONFIG_VIRTIO_NET_ZEROCOPY_TX */
     if (net_pkt_read(pkt, desc->data, total_len))
@@ -333,10 +333,11 @@ static int virtio_net_send(const struct device *dev, struct net_pkt *pkt)
         }
     /* should not happen, VQ size == desc count and we use one VQ entry per desc, maybe __ASSERT() */
     /* maybe when doin scatter-gather this will change */
-    if (virtqueue_enqueue_buf(DEV_DATA(dev)->vqout, (void*)desc, 0, (char*)desc->pkt, total_len + DEV_DATA(dev)->hdrsize))
+    struct virtqueue_buf vb[1] = {{.buf = desc->pkt, .len = total_len + DEV_DATA(dev)->hdrsize} };
+    if (virtqueue_add_buffer(DEV_DATA(dev)->vqout, vb, 1, 0, (void*)desc))
         goto recycle;
 #endif /* CONFIG_VIRTIO_NET_ZEROCOPY_TX */
-    virtqueue_notify(DEV_DATA(dev)->vqout);
+    virtqueue_kick(DEV_DATA(dev)->vqout);
     k_sem_take(&desc->done_sem, K_FOREVER);
     return 0;
 
@@ -352,7 +353,7 @@ static void virtio_net_vqout_cb(void *arg)
 {
     struct virtio_net_data *pdata = arg;
     struct virtio_net_tx_desc *desc;
-    while ((desc = virtqueue_dequeue(pdata->vqout, NULL)))
+    while ((desc = virtqueue_get_buffer(pdata->vqout, NULL, NULL)))
         {
 #if !defined(CONFIG_LOG_MODE_IMMEDIATE) && !defined(CONFIG_LOG2_MODE_IMMEDIATE)
         LOG_INST_DBG(DEV_CFG(pdata->dev)->log, "dequeued %p\n", desc);
@@ -369,7 +370,7 @@ static void virtio_net_vqin_cb(void *arg)
     struct virtio_net_rx_desc *desc;
     int length;
 
-    while ((desc = virtqueue_dequeue(DEV_DATA(dev)->vqin, &length)))
+    while ((desc = virtqueue_get_buffer(DEV_DATA(dev)->vqin, &length, NULL)))
         {
         length -= DEV_DATA(dev)->hdrsize;
 #if !defined(CONFIG_LOG_MODE_IMMEDIATE) && !defined(CONFIG_LOG2_MODE_IMMEDIATE)
@@ -437,7 +438,7 @@ static void virtio_net_vqin_cb(void *arg)
     int length;
     struct net_pkt *pkt;
 
-    while ((desc = virtqueue_dequeue(DEV_DATA(dev)->vqin, &length)))
+    while ((desc = virtqueue_get_buffer(DEV_DATA(dev)->vqin, &length, NULL)))
         {
         length -= DEV_DATA(dev)->hdrsize;
 #if !defined(CONFIG_LOG_MODE_IMMEDIATE) && !defined(CONFIG_LOG2_MODE_IMMEDIATE)
@@ -480,7 +481,8 @@ static void virtio_net_rx_refill(struct virtio_net_data *pdata)
             }
         desc = SYS_SLIST_CONTAINER(node, desc, node);
         memset(&desc->pkt->hdr, 0, sizeof(desc->pkt->hdr));
-        if (virtqueue_enqueue_buf(pdata->vqin, (void*)desc, 1, (char*)desc->pkt, pdata->hdrsize + NET_ETH_MTU))
+        struct virtqueue_buf vb[1] = {{.buf = desc->pkt, .len = pdata->hdrsize + NET_ETH_MTU} };
+        if (virtqueue_add_buffer(pdata->vqin, vb, 0, 1, (void*)desc))
             {
             __ASSERT(0, "should have one descriptor per VQ buffer. this should really never happen");
             sys_slist_append(&pdata->rx_free_list, &desc->node);

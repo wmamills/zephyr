@@ -128,7 +128,7 @@ static int virtio_mmio_init(const struct device *dev)
                     vmdev->shm_mem.size, K_MEM_CACHE_NONE);
     }
 
-    if (virtio_device_init(vmdev, virt_mem_ptr, cfg_mem_ptr, (void *)dev))
+    if (virtio_mmio_device_init(vmdev, virt_mem_ptr, cfg_mem_ptr, (void *)dev))
         return -1;
 
     metal_log(METAL_LOG_DEBUG, "device %s @%p\n", dev->name, dev);
