@@ -51,9 +51,9 @@ static int virtio_rng_init(const struct device *dev)
         LOG_INST_ERR(DEV_CFG(dev)->log, "Expected devid %04x, got %04x\n", VIRTIO_ID_ENTROPY, devid);
         return -1;
         }
-    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
-    virtio_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
-    features = virtio_get_features(vdev);
+    virtio_device_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
+    virtio_device_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
+    features = virtio_device_get_features(vdev);
 
     LOG_INST_DBG(DEV_CFG(dev)->log, "features: %08x\n", features);
 
@@ -69,7 +69,7 @@ static int virtio_rng_init(const struct device *dev)
     if (!DEV_DATA(dev)->vqin)
         return -1;
     virtio_mmio_register_device(vdev, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
-    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+    virtio_device_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
 
     virtqueue_kick(DEV_DATA(dev)->vqin);
 

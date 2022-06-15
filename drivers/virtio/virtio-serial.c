@@ -168,9 +168,9 @@ static int virtio_serial_init(const struct device *dev)
         printk("Bad devid %08x\n", devid);
         return -1;
         }
-    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
-    virtio_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
-    features = virtio_get_features(vdev);
+    virtio_device_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER);
+    virtio_device_set_features(vdev, 0/*VIRTIO_F_NOTIFY_ON_EMPTY*/);
+    features = virtio_device_get_features(vdev);
     printk("features: %08x\n", features);
 
     DEV_DATA(dev)->chan0->vqin =
@@ -211,7 +211,7 @@ static int virtio_serial_init(const struct device *dev)
     DEV_DATA(dev)->chan0->rxbuf = 0;
 
     virtio_mmio_register_device(vdev, DEV_CFG(dev)->vq_count, DEV_CFG(dev)->vqs);
-    virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+    virtio_device_set_status(vdev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
     virtqueue_kick(DEV_DATA(dev)->chan0->vqin);
     virtqueue_kick(DEV_DATA(dev)->chan0->vqout);
 
